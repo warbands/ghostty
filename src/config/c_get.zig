@@ -184,6 +184,34 @@ test "c_get: optional" {
     }
 }
 
+test "c_get: macos-active-tab-color" {
+    const testing = std.testing;
+    const alloc = testing.allocator;
+
+    var c = try Config.default(alloc);
+    defer c.deinit();
+
+    {
+        var cval: Config.MacActiveTabColor.C = undefined;
+        try testing.expect(!get(&c, .@"macos-active-tab-color", @ptrCast(&cval)));
+    }
+    {
+        c.@"macos-active-tab-color" = .{ .color = .{ .r = 255, .g = 128, .b = 0 } };
+        var cval: Config.MacActiveTabColor.C = undefined;
+        try testing.expect(get(&c, .@"macos-active-tab-color", @ptrCast(&cval)));
+        try testing.expectEqual(Config.MacActiveTabColor.C.Tag.color, cval.tag);
+        try testing.expectEqual(255, cval.color.r);
+        try testing.expectEqual(128, cval.color.g);
+        try testing.expectEqual(0, cval.color.b);
+    }
+    {
+        c.@"macos-active-tab-color" = .accent;
+        var cval: Config.MacActiveTabColor.C = undefined;
+        try testing.expect(get(&c, .@"macos-active-tab-color", @ptrCast(&cval)));
+        try testing.expectEqual(Config.MacActiveTabColor.C.Tag.accent, cval.tag);
+    }
+}
+
 test "c_get: background-blur" {
     const testing = std.testing;
     const alloc = testing.allocator;

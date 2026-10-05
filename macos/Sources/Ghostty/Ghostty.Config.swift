@@ -372,6 +372,27 @@ extension Ghostty {
             return MacOSTitlebarProxyIcon(rawValue: str) ?? defaultValue
         }
 
+        var macosActiveTabColor: NSColor? {
+            guard let config = self.config else { return nil }
+            var v: ghostty_config_macos_active_tab_color_s = .init()
+            let key = "macos-active-tab-color"
+            guard ghostty_config_get(config, &v, key, UInt(key.lengthOfBytes(using: .utf8))) else { return nil }
+
+            var opacity: Double = 0.85
+            let opacityKey = "macos-active-tab-opacity"
+            _ = ghostty_config_get(config, &opacity, opacityKey, UInt(opacityKey.lengthOfBytes(using: .utf8)))
+            guard opacity > 0 else { return nil }
+
+            let color: NSColor
+            if v.tag == GHOSTTY_MACOS_ACTIVE_TAB_COLOR_ACCENT {
+                color = .controlAccentColor
+            } else {
+                color = NSColor(ghostty: v.color)
+            }
+
+            return color.withAlphaComponent(opacity)
+        }
+
         var macosDockDropBehavior: MacDockDropBehavior {
             let defaultValue = MacDockDropBehavior.new_tab
             guard let config = self.config else { return defaultValue }

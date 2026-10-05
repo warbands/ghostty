@@ -169,6 +169,49 @@ struct ConfigTests {
         #expect(config.windowPositionY == nil)
     }
 
+    // MARK: - Active Tab Color
+
+    @Test func macosActiveTabColorDefaultsToNil() throws {
+        let config = try TemporaryConfig("")
+        #expect(config.macosActiveTabColor == nil)
+    }
+
+    @Test func macosActiveTabColorSetToHex() throws {
+        let config = try TemporaryConfig("macos-active-tab-color = #4e2a84")
+        let color = try #require(config.macosActiveTabColor?.usingColorSpace(.sRGB))
+        #expect(abs(color.redComponent - 78 / 255) < 0.001)
+        #expect(abs(color.greenComponent - 42 / 255) < 0.001)
+        #expect(abs(color.blueComponent - 132 / 255) < 0.001)
+        #expect(abs(color.alphaComponent - 0.85) < 0.001)
+    }
+
+    @Test func macosActiveTabColorSetToAccent() throws {
+        let config = try TemporaryConfig("macos-active-tab-color = accent")
+        let color = try #require(config.macosActiveTabColor?.usingColorSpace(.sRGB))
+        let accent = try #require(NSColor.controlAccentColor.usingColorSpace(.sRGB))
+        #expect(abs(color.redComponent - accent.redComponent) < 0.001)
+        #expect(abs(color.greenComponent - accent.greenComponent) < 0.001)
+        #expect(abs(color.blueComponent - accent.blueComponent) < 0.001)
+        #expect(abs(color.alphaComponent - 0.85) < 0.001)
+    }
+
+    @Test func macosActiveTabOpacitySetToCustom() throws {
+        let config = try TemporaryConfig("""
+        macos-active-tab-color = #4e2a84
+        macos-active-tab-opacity = 0.5
+        """)
+        let color = try #require(config.macosActiveTabColor)
+        #expect(abs(color.alphaComponent - 0.5) < 0.001)
+    }
+
+    @Test func macosActiveTabOpacityZeroDisablesTint() throws {
+        let config = try TemporaryConfig("""
+        macos-active-tab-color = #4e2a84
+        macos-active-tab-opacity = 0
+        """)
+        #expect(config.macosActiveTabColor == nil)
+    }
+
     // MARK: - Config Loading
 
     @Test func loadedIsTrueForValidConfig() throws {

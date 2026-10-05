@@ -583,6 +583,17 @@ typedef struct {
   ghostty_quick_terminal_size_s secondary;
 } ghostty_config_quick_terminal_size_s;
 
+// config.MacActiveTabColor
+typedef enum {
+  GHOSTTY_MACOS_ACTIVE_TAB_COLOR_COLOR,
+  GHOSTTY_MACOS_ACTIVE_TAB_COLOR_ACCENT,
+} ghostty_macos_active_tab_color_tag_e;
+
+typedef struct {
+  ghostty_macos_active_tab_color_tag_e tag;
+  ghostty_config_color_s color;
+} ghostty_config_macos_active_tab_color_s;
+
 // config.Fullscreen
 typedef enum {
   GHOSTTY_CONFIG_FULLSCREEN_FALSE,

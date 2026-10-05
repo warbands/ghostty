@@ -613,6 +613,14 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
                 }
             }
         }
+
+        // The selected tab can change without any window becoming main, such
+        // as when the selected tab is dragged out of this window. This is
+        // deferred because on a config reload we're called before the new
+        // config is stored.
+        DispatchQueue.main.async { [weak self] in
+            (self?.window as? TerminalWindow)?.syncActiveTabTint()
+        }
     }
 
     private func fixTabBar() {

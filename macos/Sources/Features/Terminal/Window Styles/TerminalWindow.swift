@@ -38,6 +38,14 @@ class TerminalWindow: NSWindow {
     /// Sets up our tab context menu
     private var tabMenuObserver: NSObjectProtocol?
 
+    /// Restyles the selected tab when our appearance changes, since the muted
+    /// fill for inactive windows depends on it.
+    private var effectiveAppearanceObservation: NSKeyValueObservation?
+
+    /// Restyles the selected tab when the system accent color changes, for
+    /// `macos-active-tab-color = accent`.
+    private var systemColorsObserver: NSObjectProtocol?
+
     /// Handles inline tab title editing for this host window.
     private(set) lazy var tabTitleEditor = TabTitleEditor(
         hostWindow: self,
@@ -171,6 +179,19 @@ class TerminalWindow: NSWindow {
         stackView.addArrangedSubview(resetZoomTabButton)
         tab.accessoryView = stackView
 
+        // Subclasses and the system can change our appearance after
+        // syncAppearance, so follow the effective appearance directly.
+        effectiveAppearanceObservation = observe(\.effectiveAppearance) { [weak self] _, _ in
+            self?.syncActiveTabTint()
+        }
+        systemColorsObserver = NotificationCenter.default.addObserver(
+            forName: NSColor.systemColorsDidChangeNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.syncActiveTabTint()
+        }
+
         // Get our saved level
         level = UserDefaults.ghostty.value(forKey: Self.defaultLevelKey) as? NSWindow.Level ?? .normal
     }
@@ -225,7 +246,130 @@ class TerminalWindow: NSWindow {
     override func resignMain() {
         super.resignMain()
         viewModel.isMainWindow = false
+        syncActiveTabTint()
     }
+
+    /// Tints the selected tab in our tab group using `macos-active-tab-color`.
+    /// The tab buttons are private AppKit views, so we find each tab's glass
+    /// view by walking up from its tab accessory view. The config is read on
+    /// every call rather than stored in DerivedConfig so that a config reload
+    /// takes effect.
+    ///
+    /// Glass tints aren't drawn while the window is inactive, so in that case
+    /// we fill the selected tab with a muted version of the color instead,
+    /// much like the system dims the selected tab of an inactive window.
+    func syncActiveTabTint() {
+#if compiler(>=6.2)
+        guard #available(macOS 26.0, *) else { return }
+        guard let tabGroup else { return }
+        guard let appDelegate = NSApp.delegate as? AppDelegate else { return }
+        let tint = appDelegate.ghostty.config.macosActiveTabColor
+        let styled = Self.activeTabStyledViews
+
+        // Nothing to apply and nothing to undo, so leave AppKit's views alone.
+        if tint == nil && styled.count == 0 { return }
+
+        let isActive = tabGroup.selectedWindow?.isMainWindow ?? false
+
+        for case let window as TerminalWindow in tabGroup.windows {
+            guard let glass = window.tabButtonGlassView else { continue }
+            let layer = glass.contentView?.layer
+            let isSelected = window === tabGroup.selectedWindow
+            let tintColor = isSelected && isActive ? tint : nil
+
+            // The window hosting the tab bar has the current appearance. The glass
+            // view's own appearance can lag behind it right after a change.
+            let appearance = glass.window?.effectiveAppearance ?? glass.effectiveAppearance
+            let fillColor = isSelected && !isActive ? tint.flatMap {
+                Self.inactiveTabFill(for: $0, appearance: appearance)
+            } : nil
+
+            // Put back AppKit's original style on any tab we no longer style.
+            guard tintColor != nil || fillColor != nil else {
+                guard let original = styled.object(forKey: glass) else { continue }
+                glass.tintColor = original.tintColor
+                layer?.backgroundColor = original.backgroundColor
+                layer?.cornerRadius = original.cornerRadius
+                styled.removeObject(forKey: glass)
+                continue
+            }
+
+            let original: ActiveTabOriginalStyle
+            if let existing = styled.object(forKey: glass) {
+                original = existing
+            } else {
+                original = ActiveTabOriginalStyle(
+                    tintColor: glass.tintColor,
+                    backgroundColor: layer?.backgroundColor,
+                    cornerRadius: layer?.cornerRadius ?? 0)
+                styled.setObject(original, forKey: glass)
+            }
+
+            glass.tintColor = tintColor ?? original.tintColor
+            if let fillColor {
+                layer?.backgroundColor = fillColor.cgColor
+                layer?.cornerRadius = (layer?.bounds.height ?? 0) / 2
+            } else {
+                layer?.backgroundColor = original.backgroundColor
+                layer?.cornerRadius = original.cornerRadius
+            }
+        }
+#endif
+    }
+
+#if compiler(>=6.2)
+    /// The glass view of this window's tab button. We only look between our
+    /// tab accessory view and the tab button, so that we never pick up some
+    /// other glass further up the view hierarchy.
+    @available(macOS 26.0, *)
+    private var tabButtonGlassView: NSGlassEffectView? {
+        guard let accessoryView = tab.accessoryView,
+              let tabButton = accessoryView.firstSuperview(withClassName: "NSTabButton") else { return nil }
+        var view = accessoryView.superview
+        while let current = view {
+            if let glass = current as? NSGlassEffectView { return glass }
+            if current === tabButton { break }
+            view = current.superview
+        }
+        return nil
+    }
+
+    /// The muted fill for the selected tab of an inactive window. Light glass
+    /// already washes tints out, so we lighten less than we darken.
+    private static func inactiveTabFill(for color: NSColor, appearance: NSAppearance) -> NSColor? {
+        // Resolve dynamic colors such as the accent color for this appearance.
+        var resolved: NSColor?
+        appearance.performAsCurrentDrawingAppearance {
+            resolved = color.usingColorSpace(.sRGB)
+        }
+        guard let color = resolved else { return nil }
+        let brightness = color.brightnessComponent
+        return NSColor(
+            hue: color.hueComponent,
+            saturation: color.saturationComponent * 0.75,
+            brightness: appearance.isDark ? brightness * 0.6 : 1 - (1 - brightness) * 0.8,
+            alpha: color.alphaComponent)
+    }
+
+    /// The style a tab's glass view had before we tinted it, so that it can be
+    /// restored exactly when the tab is deselected or the tint is removed.
+    private final class ActiveTabOriginalStyle {
+        let tintColor: NSColor?
+        let backgroundColor: CGColor?
+        let cornerRadius: CGFloat
+
+        init(tintColor: NSColor?, backgroundColor: CGColor?, cornerRadius: CGFloat) {
+            self.tintColor = tintColor
+            self.backgroundColor = backgroundColor
+            self.cornerRadius = cornerRadius
+        }
+    }
+
+    /// Tab glass views we've styled, across all windows. Tabs can move between
+    /// windows, so this isn't tracked per window.
+    private static let activeTabStyledViews =
+        NSMapTable<NSView, ActiveTabOriginalStyle>.weakToStrongObjects()
+#endif
 
     @discardableResult
     func beginInlineTabTitleEdit(for targetWindow: NSWindow) -> Bool {
@@ -312,6 +456,9 @@ class TerminalWindow: NSWindow {
 
         // We don't need to do this with the update accessory. I don't know why but
         // everything works fine.
+
+        // AppKit may have created new tab buttons, so restyle the selected one.
+        syncActiveTabTint()
     }
 
     private func tabBarDidDisappear() {
@@ -529,6 +676,9 @@ class TerminalWindow: NSWindow {
         appearance = surfaceConfig.windowAppearance
         hasShadow = surfaceConfig.macosWindowShadow
 
+        // Restyle the selected tab in case our tab color config changed.
+        syncActiveTabTint()
+
         // Window transparency only takes effect if our window is not native fullscreen.
         // In native fullscreen we disable transparency/opacity because the background
         // becomes gray and widgets show through.
@@ -629,6 +779,10 @@ class TerminalWindow: NSWindow {
 
     deinit {
         if let observer = tabMenuObserver {
+            NotificationCenter.default.removeObserver(observer)
+        }
+        effectiveAppearanceObservation?.invalidate()
+        if let observer = systemColorsObserver {
             NotificationCenter.default.removeObserver(observer)
         }
     }

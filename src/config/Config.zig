@@ -21,6 +21,7 @@ const deepEqual = @import("../datastruct/comparison.zig").deepEqual;
 const fontpkg = @import("../font/main.zig");
 const inputpkg = @import("../input.zig");
 const internal_os = @import("../os/main.zig");
+const lib = @import("../lib/main.zig");
 const cli = @import("../cli.zig");
 
 const conditional = @import("conditional.zig");
@@ -3477,6 +3478,37 @@ keybind: Keybinds = .{},
 /// editor, etc.
 @"macos-titlebar-proxy-icon": MacTitlebarProxyIcon = .visible,
 
+/// Tint color for the selected tab in the macOS tab bar. On macOS 26 and
+/// later the tab bar is drawn with Liquid Glass and the selected tab can be
+/// hard to tell apart from the others, especially with a dark background.
+/// Setting this tints the selected tab so it stands out. In inactive windows
+/// a muted version of the color is used instead.
+///
+/// If this is not set, the selected tab uses the default system appearance.
+///
+/// Specified as either hex (`#RRGGBB` or `RRGGBB`) or a named X11 color.
+/// It can also be set to `accent` to use the accent color chosen in
+/// System Settings, which updates when that setting changes.
+///
+/// This only has an effect on macOS 26 and later, with any titlebar style
+/// that shows a tab bar. It can be changed at runtime.
+///
+/// Available since: 1.4.0
+@"macos-active-tab-color": ?MacActiveTabColor = null,
+
+/// The opacity of the `macos-active-tab-color` tint, including the muted
+/// version used in inactive windows. A value of 1 is the strongest tint and
+/// a value of 0 is no tint at all. A value outside of the range 0 to 1 will
+/// be clamped to the nearest valid value.
+///
+/// The tab bar's glass washes out tints more with a light background, so
+/// light themes may need a higher value.
+///
+/// This has no effect unless `macos-active-tab-color` is set.
+///
+/// Available since: 1.4.0
+@"macos-active-tab-opacity": f64 = 0.85,
+
 /// Controls the windowing behavior when dropping a file or folder
 /// onto the Ghostty icon in the macOS dock.
 ///
@@ -4921,6 +4953,9 @@ pub fn finalize(self: *Config) !void {
 
     // Clamp our split opacity
     self.@"unfocused-split-opacity" = @min(1.0, @max(0.15, self.@"unfocused-split-opacity"));
+
+    // Clamp our active tab opacity
+    self.@"macos-active-tab-opacity" = @min(1.0, @max(0.0, self.@"macos-active-tab-opacity"));
 
     // Clamp our contrast
     self.@"minimum-contrast" = @min(21, @max(1, self.@"minimum-contrast"));
@@ -9282,6 +9317,101 @@ pub const MacTitlebarProxyIcon = enum {
     hidden,
 };
 
+/// See macos-active-tab-color
+pub const MacActiveTabColor = union(enum) {
+    color: Color,
+    accent,
+
+    /// C API structure for MacActiveTabColor
+    pub const C = extern struct {
+        tag: Tag,
+        color: Color.C,
+
+        // Sync with: ghostty_macos_active_tab_color_tag_e
+        pub const Tag = enum(c_int) {
+            color,
+            accent,
+
+            test "ghostty.h MacActiveTabColor.C.Tag" {
+                try lib.checkGhosttyHEnum(Tag, "GHOSTTY_MACOS_ACTIVE_TAB_COLOR_");
+            }
+        };
+    };
+
+    pub fn cval(self: MacActiveTabColor) C {
+        return switch (self) {
+            .color => |v| .{ .tag = .color, .color = v.cval() },
+            .accent => .{ .tag = .accent, .color = .{ .r = 0, .g = 0, .b = 0 } },
+        };
+    }
+
+    pub fn parseCLI(input_: ?[]const u8) !MacActiveTabColor {
+        const input = input_ orelse return error.ValueRequired;
+        if (std.mem.eql(u8, input, "accent")) return .accent;
+        return .{ .color = try Color.parseCLI(input) };
+    }
+
+    /// Used by Formatter
+    pub fn formatEntry(self: MacActiveTabColor, formatter: formatterpkg.EntryFormatter) !void {
+        switch (self) {
+            .color => try self.color.formatEntry(formatter),
+            .accent => try formatter.formatEntry([:0]const u8, @tagName(self)),
+        }
+    }
+
+    test "parseCLI" {
+        const testing = std.testing;
+
+        try testing.expectEqual(
+            MacActiveTabColor{ .color = Color{ .r = 78, .g = 42, .b = 132 } },
+            try MacActiveTabColor.parseCLI("#4e2a84"),
+        );
+        try testing.expectEqual(
+            MacActiveTabColor{ .color = Color{ .r = 0, .g = 0, .b = 0 } },
+            try MacActiveTabColor.parseCLI("black"),
+        );
+        try testing.expectEqual(
+            MacActiveTabColor.accent,
+            try MacActiveTabColor.parseCLI("accent"),
+        );
+
+        try testing.expectError(error.InvalidValue, MacActiveTabColor.parseCLI("a"));
+    }
+
+    test "formatConfig" {
+        const testing = std.testing;
+        var buf: std.Io.Writer.Allocating = .init(testing.allocator);
+        defer buf.deinit();
+
+        var v: MacActiveTabColor = .accent;
+        try v.formatEntry(formatterpkg.entryFormatter("a", &buf.writer));
+        try testing.expectEqualSlices(u8, "a = accent\n", buf.written());
+    }
+
+    test "formatConfig color" {
+        const testing = std.testing;
+        var buf: std.Io.Writer.Allocating = .init(testing.allocator);
+        defer buf.deinit();
+
+        var v = try MacActiveTabColor.parseCLI("#4e2a84");
+        try v.formatEntry(formatterpkg.entryFormatter("a", &buf.writer));
+        try testing.expectEqualSlices(u8, "a = #4e2a84\n", buf.written());
+    }
+
+    test "cval" {
+        const testing = std.testing;
+
+        const color = (MacActiveTabColor{ .color = .{ .r = 78, .g = 42, .b = 132 } }).cval();
+        try testing.expectEqual(C.Tag.color, color.tag);
+        try testing.expectEqual(78, color.color.r);
+        try testing.expectEqual(42, color.color.g);
+        try testing.expectEqual(132, color.color.b);
+
+        const accent = (MacActiveTabColor{ .accent = {} }).cval();
+        try testing.expectEqual(C.Tag.accent, accent.tag);
+    }
+};
+
 /// See macos-hidden
 pub const MacHidden = enum {
     never,
@@ -11247,6 +11377,45 @@ test "clipboard write limit" {
         std.math.maxInt(usize),
         cfg.@"clipboard-write-limit-bytes".value,
     );
+}
+
+test "macos active tab color and opacity" {
+    const testing = std.testing;
+    const alloc = testing.allocator;
+
+    var cfg = try Config.default(alloc);
+    defer cfg.deinit();
+    try testing.expectEqual(null, cfg.@"macos-active-tab-color");
+    try testing.expectEqual(0.85, cfg.@"macos-active-tab-opacity");
+
+    var it: TestIterator = .{ .data = &.{
+        "--macos-active-tab-color=accent",
+        "--macos-active-tab-opacity=1.5",
+    } };
+    try cfg.loadIter(alloc, &it);
+    try cfg.finalize();
+
+    try testing.expectEqual(
+        MacActiveTabColor.accent,
+        cfg.@"macos-active-tab-color".?,
+    );
+    try testing.expectEqual(1.0, cfg.@"macos-active-tab-opacity");
+
+    var negative_it: TestIterator = .{ .data = &.{
+        "--macos-active-tab-opacity=-0.5",
+    } };
+    try cfg.loadIter(alloc, &negative_it);
+    try cfg.finalize();
+    try testing.expectEqual(0.0, cfg.@"macos-active-tab-opacity");
+
+    var reset_it: TestIterator = .{ .data = &.{
+        "--macos-active-tab-color=",
+        "--macos-active-tab-opacity=",
+    } };
+    try cfg.loadIter(alloc, &reset_it);
+    try cfg.finalize();
+    try testing.expectEqual(null, cfg.@"macos-active-tab-color");
+    try testing.expectEqual(0.85, cfg.@"macos-active-tab-opacity");
 }
 
 test "compatibility: scrollback-limit renamed to bytes" {
